@@ -44,51 +44,64 @@ module TCPPrism
         m = nil
       end
 
-      spawn do
-        buffer = uninitialized UInt8[16384]
-        loop do
-          len = client.read(buffer.to_slice)
-          break if len.zero?
-          begin
-            f.write buffer.to_slice[0, len] if f
-          rescue ex
-            puts ex.inspect
-            client.close
-            m.try &.close
-            break
-          end
-          begin
-            m.not_nil!.write(buffer.to_slice[0, len]) if m
-          rescue ex
-            puts ex.inspect
-            m = nil
-          end
-        end
-      end
-      spawn do
-        buffer = uninitialized UInt8[16384]
-        loop do
-          len = f.read(buffer.to_slice)
-          break if len.zero?
-          client.write buffer.to_slice[0, len]
+      spawn client_to_both(client, f, m)
+      spawn forward_to_client(client, f)
+      spawn empty_read(m.not_nil!)
+    end
+
+    private def client_to_both(client, f, m)
+      buffer = uninitialized UInt8[16384]
+      loop do
+        len = client.read(buffer.to_slice)
+        break if len.zero?
+        begin
+          f.write buffer.to_slice[0, len] if f
         rescue ex
           puts ex.inspect
-          f.close if f
           client.close
+          m.try &.close
           break
         end
-      end
-      spawn do
-        buffer = uninitialized UInt8[16384]
-        loop do
-          break unless m
-          len = m.not_nil!.read(buffer.to_slice)
-          break if len.zero?
+        begin
+          m.not_nil!.write(buffer.to_slice[0, len]) if m
         rescue ex
           puts ex.inspect
           m = nil
         end
       end
+      puts "EOF on client"
+    ensure
+      client.close
+      f.close
+      m.close
+    end
+
+    private def forward_to_client(client, f)
+      buffer = uninitialized UInt8[16384]
+      loop do
+        len = f.read(buffer.to_slice)
+        break if len.zero?
+        client.write buffer.to_slice[0, len]
+      end
+      puts "EOF on forward"
+    rescue ex
+      puts "forward_to_client:", ex.inspect
+    ensure
+      client.close
+      f.close
+    end
+
+    private def empty_read(m : TCPSocket)
+      buffer = uninitialized UInt8[16384]
+      loop do
+        len = m.read(buffer.to_slice)
+        break if len.zero?
+      end
+      puts "EOF on mirror"
+    rescue ex
+      puts "empty_read:", ex.inspect
+    ensure
+      m.close
     end
   end
 end
