@@ -2,4 +2,7 @@
 /lib/
 /bin/
 /.shards/
+/.vagrant/
 *.dwarf
+*.log
+*.tar.gz
