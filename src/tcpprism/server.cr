@@ -1,107 +1,122 @@
 require "uri"
+require "logger"
 require "socket"
 
 module TCPPrism
   class Server
     def initialize(listen : String, forward : String, mirror : String)
-      p @listen = URI.parse "tcp://#{listen}"
-      p @forward = URI.parse "tcp://#{forward}"
-      p @mirror = URI.parse "tcp://#{mirror}"
+      @listen = URI.parse "tcp://#{listen}"
+      @forward = URI.parse "tcp://#{forward}"
+      @mirror = URI.parse "tcp://#{mirror}"
       @server = TCPServer.new(@listen.host.not_nil!, @listen.port.not_nil!)
+      puts "Listening: #{@server.local_address}"
+      puts "Forward: #{@forward}"
+      puts "Mirror: #{@mirror}"
     end
 
     def run
-      puts "Listening on #{@server.local_address}"
       while client = @server.accept?
-        puts "Client connected #{client.remote_address}"
         spawn handle_client(client)
       end
     end
 
     def handle_client(client)
-      client.sync = true
-      client.read_buffering = false
-      client.write_timeout = 5
+      socket_options(client)
+
+      log = Logger.new(STDOUT, progname: client.remote_address.to_s)
+      log.formatter = Logger::Formatter.new do |severity, datetime, progname, message, io|
+        io << "[" << progname << "] " << severity.to_s.rjust(5) << " " << message
+      end
+      log.info "Connected"
 
       begin
-        f = TCPSocket.new(@forward.host.not_nil!, @forward.port.not_nil!)
-        f.sync = true
-        f.read_buffering = false
-        f.write_timeout = 5
+        f = TCPSocket.new(@forward.host.not_nil!, @forward.port.not_nil!, connect_timeout: 5)
+        socket_options(f)
+        spawn forward_to_client(client, f, log)
       rescue ex
-        puts ex.inspect
+        log.error ex.message
         client.close
+        log.info "Disconnected"
         return
       end
 
       begin
-        m = TCPSocket.new(@mirror.host.not_nil!, @mirror.port.not_nil!, connect_timeout = 5)
-        m.sync = true
-        m.read_buffering = false
-        m.write_timeout = 5
+        m = TCPSocket.new(@mirror.host.not_nil!, @mirror.port.not_nil!, connect_timeout: 5)
+        socket_options(m)
+        spawn empty_read(m, log)
       rescue ex
-        puts ex.inspect
+        log.error ex.message
         m = nil
       end
 
-      spawn client_to_both(client, f, m)
-      spawn forward_to_client(client, f)
-      spawn empty_read(m.not_nil!)
+      spawn client_to_both(client, f, m, log)
     end
 
-    private def client_to_both(client, f, m)
+    private def client_to_both(client, f, m, log)
       buffer = uninitialized UInt8[16384]
       loop do
         len = client.read(buffer.to_slice)
         break if len.zero?
         begin
-          f.write buffer.to_slice[0, len] if f
+          f.write buffer.to_slice[0, len]
         rescue ex
-          puts ex.inspect
-          client.close
-          m.try &.close
+          log.error "Write to forward: #{ex.inspect}" unless f.closed?
           break
         end
         begin
-          m.not_nil!.write(buffer.to_slice[0, len]) if m
+          m.write(buffer.to_slice[0, len])
         rescue ex
-          puts ex.inspect
+          log.error "Write to mirror: #{ex.inspect}" unless m.closed?
+          m.try &.close
           m = nil
-        end
+        end if m
       end
-      puts "EOF on client"
+    rescue ex
+      log.error "Reading from client: #{ex.inspect}" unless client.closed?
     ensure
+      log.info "Disconnected"
       client.close
       f.close
-      m.close
+      m.try &.close
     end
 
-    private def forward_to_client(client, f)
+    private def forward_to_client(client, f, log)
       buffer = uninitialized UInt8[16384]
       loop do
         len = f.read(buffer.to_slice)
         break if len.zero?
-        client.write buffer.to_slice[0, len]
+        begin
+          client.write buffer.to_slice[0, len]
+        rescue ex
+          log.error "Write to client: #{ex.inspect}" unless client.closed?
+          break
+        end
       end
-      puts "EOF on forward"
+      log.error "Forward disconnected"
     rescue ex
-      puts "forward_to_client:", ex.inspect
+      log.error "Reading from forward: #{ex.inspect}" unless f.closed?
     ensure
       client.close
       f.close
     end
 
-    private def empty_read(m : TCPSocket)
+    private def empty_read(m, log)
       buffer = uninitialized UInt8[16384]
       loop do
         len = m.read(buffer.to_slice)
         break if len.zero?
       end
-      puts "EOF on mirror"
+      log.error "Mirror disconnected"
     rescue ex
-      puts "empty_read:", ex.inspect
+      log.error "Reading from mirror: #{ex.inspect}" unless m.closed?
     ensure
       m.close
+    end
+
+    private def socket_options(socket)
+      socket.sync = true
+      socket.read_buffering = false
+      socket.write_timeout = 5
     end
   end
 end
