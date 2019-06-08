@@ -1,0 +1,16 @@
+#!/bin/sh
+set -eu
+shards build --release --production --static
+pkg_name=tcpprism
+pkg_platform=$(uname -s | tr "[:upper:]" "[:lower:]")-$(uname -m)
+pkg_version=$(shards version)
+pkg_revision=${1:-1}
+rm -rf $pkg_name
+mkdir $pkg_name/
+cp bin/tcpprism README.md LICENSE $pkg_name/
+strip --strip-unneeded \
+  --remove-section=.comment \
+  --remove-section=.note \
+  $pkg_name/tcpprism
+tar zchf $pkg_name-$pkg_version-$pkg_revision.$pkg_platform.tar.gz $pkg_name/
+rm -r $pkg_name

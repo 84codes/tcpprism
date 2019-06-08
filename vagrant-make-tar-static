@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+vagrant up
+vagrant ssh -c "cd /vagrant; ./make-static-tar"
