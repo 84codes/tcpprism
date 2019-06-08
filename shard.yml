@@ -1,0 +1,13 @@
+name: tcpprism
+version: 0.1.0
+
+authors:
+  - Carl Hörberg <carl.hoerberg@gmail.com>
+
+targets:
+  tcpprism:
+    main: src/tcpprism.cr
+
+crystal: 0.29.0
+
+license: MIT
